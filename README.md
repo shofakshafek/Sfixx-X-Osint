@@ -80,8 +80,8 @@ Semua dependency di atas **otomatis diinstal oleh `install.sh`**.
 ```bash
 pkg update && pkg upgrade
 pkg install git
-git clone https://github.com/YOUR_USERNAME/sfixx-osint.git
-cd sfixx-osint
+git clone https://github.com/shofakshafek/Sfixx-X-Osint.git
+cd Sfixx-X-Osint
 chmod +x install.sh
 ./install.sh
 ```
@@ -102,7 +102,7 @@ sfixx update
 
 Atau manual:
 ```bash
-cd sfixx-osint
+cd Sfixx-X-Osint
 ./update.sh
 ```
 
@@ -113,14 +113,14 @@ cd sfixx-osint
 ## Uninstall
 
 ```bash
-cd sfixx-osint
+cd Sfixx-X-Osint
 bash uninstall.sh
 ```
 
 Lalu hapus direktori project:
 ```bash
 cd ..
-rm -rf sfixx-osint
+rm -rf Sfixx-X-Osint
 ```
 
 ---
@@ -128,7 +128,7 @@ rm -rf sfixx-osint
 ## Struktur Project
 
 ```
-sfixx-osint/
+Sfixx-X-Osint/
 ├── sfixx                 # CLI utama
 ├── install.sh            # Installer Termux
 ├── uninstall.sh          # Uninstaller
@@ -136,7 +136,6 @@ sfixx-osint/
 ├── requirements.txt
 ├── README.md
 ├── LICENSE
-├── .gitignore
 ├── config/
 │   └── config.conf       # Konfigurasi (VERSION, REPO_URL, TIMEOUT)
 ├── modules/
