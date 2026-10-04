@@ -1,0 +1,8 @@
+# Sfixx x OSINT tidak memerlukan library Python eksternal.
+# Semua modul Python menggunakan standard library saja:
+#   - json
+#   - urllib.parse
+#   - os
+#   - sys
+#
+# Tidak ada pip install yang dibutuhkan.
