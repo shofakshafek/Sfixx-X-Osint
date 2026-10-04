@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# ================================================
+# Sfixx x OSINT - Main CLI
+# Author : Sfixx
+# License: MIT
+# ================================================
+
+# --- Resolve script directory even via symlink ---
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+PROJECT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+export PROJECT_DIR
+
+MODULES_DIR="$PROJECT_DIR/modules"
+CONFIG_FILE="$PROJECT_DIR/config/config.conf"
+
+# --- Load config ---
+if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+else
+    VERSION="1.0.0"
+    TIMEOUT=10
+fi
+
+# --- Load banner (defines colors + show_banner) ---
+if [ -f "$PROJECT_DIR/assets/banner.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$PROJECT_DIR/assets/banner.sh"
+else
+    C_RESET=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_CYAN=''; C_MAGENTA=''; C_WHITE=''
+    show_banner() { echo "Sfixx x OSINT v$VERSION"; }
+fi
+
+# --- Logging helpers ---
+log_info() { echo -e "${C_BLUE:-}[-]${C_RESET} $*"; }
+log_ok()   { echo -e "${C_GREEN}[+]${C_RESET} $*"; }
+log_warn() { echo -e "${C_YELLOW}[!]${C_RESET} $*"; }
+log_err()  { echo -e "${C_RED}[x]${C_RESET} $*"; }
+log_done() { echo -e "${C_GREEN}[✓]${C_RESET} $*"; }
+
+# --- Environment checks ---
+check_internet() {
+    if curl -s -m 4 -o /dev/null https://1.1.1.1 2>/dev/null; then
+        return 0
+    fi
+    if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+require_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        log_err "Command '$1' tidak ditemukan. Jalankan: bash install.sh"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------
+# Usage / help
+# ---------------------------------------------------
+usage() {
+    cat <<EOF
+Sfixx x OSINT v$VERSION - Termux OSINT Toolkit
+
+Pemakaian:
+  sfixx                          Menu interaktif
+  sfixx username <username>      Username search di situs publik
+  sfixx domain <domain>          WHOIS / RDAP domain
+  sfixx dns <domain>             DNS records lookup
+  sfixx ip <ip|domain>           Info IP / geolokasi
+  sfixx headers <url>            HTTP headers
+  sfixx subdomain <domain>       Subdomain discovery (crt.sh)
+  sfixx url <url>                URL analyzer
+  sfixx system                   System / network info
+  sfixx update                   Update dari GitHub
+  sfixx help                     Tampilkan bantuan
+  sfixx version                  Versi
+
+Contoh:
+  sfixx domain example.com
+  sfixx dns example.com
+  sfixx ip 8.8.8.8
+  sfixx username sfixx
+EOF
+}
+
+# ---------------------------------------------------
+# Dispatch ke module
+# ---------------------------------------------------
+dispatch() {
+    local cmd="$1"; shift
+    case "$cmd" in
+        menu|interactive)
+            main_menu
+            ;;
+        help|-h|--help)
+            usage
+            ;;
+        version|-v|--version)
+            echo "Sfixx x OSINT v$VERSION"
+            ;;
+        update)
+            bash "$PROJECT_DIR/update.sh"
+            ;;
+        system)
+            # shellcheck disable=SC1091
+            source "$MODULES_DIR/system.sh"
+            system_main
+            ;;
+        username|domain|dns|ip|headers|subdomain|url)
+            if [ $# -lt 1 ] || [ -z "$1" ]; then
+                log_err "Argumen kosong. Contoh: sfixx $cmd <nilai>"
+                exit 1
+            fi
+            # shellcheck disable=SC1090
+            source "$MODULES_DIR/${cmd}.sh"
+            "${cmd}_main" "$1"
+            ;;
+        "")
+            main_menu
+            ;;
+        *)
+            log_err "Command tidak dikenal: $cmd"
+            echo
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+# ---------------------------------------------------
+# Menu interaktif
+# ---------------------------------------------------
+interactive_arg() {
+    local module="$1"
+    local prompt
+    case "$module" in
+        username)  prompt="Masukkan username        : " ;;
+        domain)    prompt="Masukkan domain          : " ;;
+        dns)       prompt="Masukkan domain          : " ;;
+        ip)        prompt="Masukkan IP / domain     : " ;;
+        headers)   prompt="Masukkan URL (http/https): " ;;
+        subdomain) prompt="Masukkan domain          : " ;;
+        url)       prompt="Masukkan URL             : " ;;
+        *)         prompt="Masukkan input           : " ;;
+    esac
+    read -r -p "$(echo -e "${C_YELLOW}${prompt}${C_RESET}")" arg
+    if [ -z "$arg" ]; then
+        log_err "Input tidak boleh kosong."
+        return 1
+    fi
+    # shellcheck disable=SC1090
+    source "$MODULES_DIR/${module}.sh"
+    "${module}_main" "$arg"
+}
+
+main_menu() {
+    while true; do
+        clear 2>/dev/null || printf '\033c'
+        show_banner
+
+        echo -e "${C_CYAN}╔══════════════════════════════════╗${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET}      ${C_YELLOW}Sfixx x OSINT${C_RESET}               ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET}      ${C_WHITE}Termux OSINT Toolkit${C_RESET}        ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}╠══════════════════════════════════╣${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[1]${C_RESET} Username Search             ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[2]${C_RESET} Domain Information          ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[3]${C_RESET} DNS Lookup                  ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[4]${C_RESET} IP Information              ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[5]${C_RESET} HTTP Headers                ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[6]${C_RESET} Subdomain Discovery         ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[7]${C_RESET} URL Analyzer                ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[8]${C_RESET} System / Network Info       ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[0]${C_RESET} Exit                        ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}╚══════════════════════════════════╝${C_RESET}"
+        echo
+
+        read -r -p "$(echo -e "${C_YELLOW}Sfixx > ${C_RESET}")" choice
+        echo
+        case "$choice" in
+            1) interactive_arg username ;;
+            2) interactive_arg domain ;;
+            3) interactive_arg dns ;;
+            4) interactive_arg ip ;;
+            5) interactive_arg headers ;;
+            6) interactive_arg subdomain ;;
+            7) interactive_arg url ;;
+            8)
+                # shellcheck disable=SC1091
+                source "$MODULES_DIR/system.sh"
+                system_main
+                ;;
+            0|q|Q|exit) log_ok "Sampai jumpa."; exit 0 ;;
+            "") ;;
+            *) log_err "Pilihan tidak valid." ;;
+        esac
+        echo
+        read -r -p "Tekan Enter untuk kembali ke menu..." _
+    done
+}
+
+# ---------------------------------------------------
+# Entry point
+# ---------------------------------------------------
+if [ $# -eq 0 ]; then
+    # Show startup only when running interactive
+    echo -e "${C_BLUE}[*]${C_RESET} Starting Sfixx x OSINT..."
+    echo -e "${C_BLUE}[*]${C_RESET} Checking dependencies..."
+    for dep in curl; do
+        require_cmd "$dep" || true
+    done
+    echo -e "${C_GREEN}[+]${C_RESET} Loading modules..."
+    echo -e "${C_GREEN}[✓]${C_RESET} Ready."
+    echo
+    main_menu
+else
+    dispatch "$@"
+fi
