@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
 # ================================================
-# Sfixx x OSINT - Phone Number Module
-# Cek: validasi nomor, operator, WhatsApp, wilayah
-# Fokus: nomor Indonesia (+62) & internasional
+# Sfixx x OSINT - Phone Number Module (v2)
+# Cek: validasi, format, operator, tipe, wilayah, link WhatsApp
+# Opsi: --json (output JSON) | --offline (tanpa jaringan)
 # ================================================
 
 phone_main() {
-    local phone="$1"
+    local phone="" json=0 offline=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json)    json=1 ;;
+            --offline) offline=1 ;;
+            -h|--help)
+                echo "  Pemakaian: sfixx phone <nomor> [--json] [--offline]"
+                echo "  Contoh   : sfixx phone 081234567890"
+                return 0 ;;
+            *) phone="$1" ;;
+        esac
+        shift
+    done
+
     if [ -z "$phone" ]; then
         log_err "Nomor telepon wajib diisi."
         echo "  Contoh: sfixx phone 081234567890"
-        return 1
-    fi
-
-    if ! check_internet; then
-        log_err "Tidak ada koneksi internet."
         return 1
     fi
 
@@ -23,302 +31,236 @@ phone_main() {
         return 1
     fi
 
-    log_info "Menganalisa nomor: ${C_YELLOW}$phone${C_RESET}"
-    echo
+    # Koneksi hanya dibutuhkan untuk cek link WhatsApp
+    if [ "$offline" -eq 0 ] && ! check_internet; then
+        log_warn "Tidak ada koneksi, lanjut mode offline." 2>/dev/null || true
+        offline=1
+    fi
 
-    SFIXX_PHONE="$phone" python3 << 'PYEOF'
+    [ "$json" -eq 0 ] && { log_info "Menganalisa nomor: ${C_YELLOW}$phone${C_RESET}"; echo; }
+
+    SFIXX_PHONE="$phone" SFIXX_JSON="$json" SFIXX_OFFLINE="$offline" python3 << 'PYEOF'
 import os, sys, re, json, urllib.request
 
-raw = os.environ.get("SFIXX_PHONE", "").strip()
-TIMEOUT = 12
+raw     = os.environ.get("SFIXX_PHONE", "").strip()
+AS_JSON = os.environ.get("SFIXX_JSON") == "1"
+OFFLINE = os.environ.get("SFIXX_OFFLINE") == "1"
+TIMEOUT = 10
+UA = {"User-Agent": "Mozilla/5.0 (Termux; Sfixx-OSINT)"}
 
 # ---------------- Helper ----------------
-def fetch_json(url, headers=None):
-    try:
-        req = urllib.request.Request(url, headers=headers or {
-            "User-Agent": "Mozilla/5.0 (Termux; Sfixx-OSINT)"
-        })
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            return json.loads(r.read().decode("utf-8", errors="ignore"))
-    except Exception:
-        return None
-
-def clean_number(n):
+def digits_only(n):
     return re.sub(r"\D", "", n)
 
-def to_intl(n):
-    n = clean_number(n)
-    if n.startswith("0"):
-        n = "62" + n[1:]
-    if not n.startswith("62") and len(n) <= 12:
-        n = "62" + n
-    return n
+def normalize(n):
+    """Kembalikan (digit_internasional, is_indonesia).
+    Aturan: '+' atau '00' = sudah internasional; '0' = lokal Indonesia;
+    '8xxx' (tanpa 0) = HP Indonesia; selain itu dianggap internasional apa adanya."""
+    plus = n.strip().startswith("+")
+    d = digits_only(n)
+    if d.startswith("00"):
+        d, plus = d[2:], True
+    if plus:
+        return d, d.startswith("62")
+    if d.startswith("62"):
+        return d, True
+    if d.startswith("0"):
+        return "62" + d[1:], True
+    if d.startswith("8"):
+        return "62" + d, True
+    return d, False
+
+result = {"input": raw}
 
 # ---------------- Validasi dasar ----------------
-digits = clean_number(raw)
-if len(digits) < 8 or len(digits) > 15:
-    print("  [x] Nomor tidak valid (panjang harus 8-15 digit).")
+d = digits_only(raw)
+if len(d) < 8 or len(d) > 15:
+    msg = "Nomor tidak valid (panjang harus 8-15 digit)."
+    print(json.dumps({"error": msg}) if AS_JSON else f"  [x] {msg}")
     sys.exit(1)
 
-is_id = digits.startswith("62") or digits.startswith("0")
-intl = to_intl(raw)
+intl, is_id = normalize(raw)
+result.update({"digits": d, "e164": "+" + intl, "indonesia": is_id})
 
-print(f"  Nomor Asli      : {raw}")
-print(f"  Nomor Bersih    : {digits}")
-print(f"  Format Internl  : +{intl}")
-print()
+# ---------------- Operator Indonesia ----------------
+OPERATORS = {
+    "Telkomsel":       ["811","812","813","821","822","823","851","852","853"],
+    "Indosat Ooredoo": ["814","815","816","855","856","857","858"],
+    "XL Axiata":       ["817","818","819","859","877","878"],
+    "AXIS":            ["831","832","833","838"],
+    "Tri (3)":         ["895","896","897","898","899"],
+    "Smartfren":       ["881","882","883","884","885","886","887","888","889"],
+}
+PREFIX2OP = {p: op for op, ps in OPERATORS.items() for p in ps}
 
-# ---------------- Mapping Operator Indonesia ----------------
-OPERATOR_MAP = {
-    # Telkomsel
-    "0811": ("Telkomsel", "simPATI / Halo"),
-    "0812": ("Telkomsel", "simPATI / Halo"),
-    "0813": ("Telkomsel", "simPATI / Halo"),
-    "0821": ("Telkomsel", "simPATI / Halo"),
-    "0822": ("Telkomsel", "simPATI / Halo"),
-    "0823": ("Telkomsel", "simPATI / Halo"),
-    "0851": ("Telkomsel", "simPATI / Halo"),
-    "0852": ("Telkomsel", "simPATI / Halo"),
-    "0853": ("Telkomsel", "simPATI / Halo"),
-    # Indosat Ooredoo
-    "0814": ("Indosat Ooredoo", "IM3 / Mentari"),
-    "0815": ("Indosat Ooredoo", "IM3 / Mentari"),
-    "0816": ("Indosat Ooredoo", "IM3 / Mentari"),
-    "0855": ("Indosat Ooredoo", "IM3 / Mentari"),
-    "0856": ("Indosat Ooredoo", "IM3 / Mentari"),
-    "0857": ("Indosat Ooredoo", "IM3 / Mentari"),
-    "0858": ("Indosat Ooredoo", "IM3 / Mentari"),
-    # XL Axiata
-    "0817": ("XL Axiata", "XL / Axis"),
-    "0818": ("XL Axiata", "XL / Axis"),
-    "0819": ("XL Axiata", "XL / Axis"),
-    "0859": ("XL Axiata", "XL / Axis"),
-    "0877": ("XL Axiata", "XL / Axis"),
-    "0878": ("XL Axiata", "XL / Axis"),
-    # AXIS
-    "0831": ("AXIS", "AXIS"),
-    "0832": ("AXIS", "AXIS"),
-    "0833": ("AXIS", "AXIS"),
-    "0838": ("AXIS", "AXIS"),
-    # Tri (3)
-    "0895": ("Tri (3)", "3 (Tri)"),
-    "0896": ("Tri (3)", "3 (Tri)"),
-    "0897": ("Tri (3)", "3 (Tri)"),
-    "0898": ("Tri (3)", "3 (Tri)"),
-    "0899": ("Tri (3)", "3 (Tri)"),
-    # Smartfren
-    "0881": ("Smartfren", "Smartfren"),
-    "0882": ("Smartfren", "Smartfren"),
-    "0883": ("Smartfren", "Smartfren"),
-    "0884": ("Smartfren", "Smartfren"),
-    "0885": ("Smartfren", "Smartfren"),
-    "0886": ("Smartfren", "Smartfren"),
-    "0887": ("Smartfren", "Smartfren"),
-    "0888": ("Smartfren", "Smartfren"),
-    "0889": ("Smartfren", "Smartfren"),
+# ---------------- Kode area telepon rumah (longest-prefix match) ----------------
+AREA = {
+    "21": "Jakarta & sekitarnya (DKI Jakarta)",
+    "22": "Bandung (Jawa Barat)",
+    "24": "Semarang (Jawa Tengah)",
+    "31": "Surabaya (Jawa Timur)",
+    "61": "Medan (Sumatera Utara)",
+    "251": "Bogor (Jawa Barat)",
+    "231": "Cirebon (Jawa Barat)",
+    "254": "Serang (Banten)",
+    "271": "Surakarta/Solo (Jawa Tengah)",
+    "274": "Yogyakarta (DIY)",
+    "341": "Malang (Jawa Timur)",
+    "361": "Denpasar (Bali)",
+    "370": "Mataram (NTB)",
+    "380": "Kupang (NTT)",
+    "401": "Kendari (Sulawesi Tenggara)",
+    "411": "Makassar (Sulawesi Selatan)",
+    "431": "Manado (Sulawesi Utara)",
+    "435": "Gorontalo (Gorontalo)",
+    "451": "Palu (Sulawesi Tengah)",
+    "511": "Banjarmasin (Kalimantan Selatan)",
+    "536": "Palangkaraya (Kalimantan Tengah)",
+    "541": "Samarinda (Kalimantan Timur)",
+    "542": "Balikpapan (Kalimantan Timur)",
+    "551": "Tarakan (Kalimantan Utara)",
+    "561": "Pontianak (Kalimantan Barat)",
+    "711": "Palembang (Sumatera Selatan)",
+    "717": "Pangkalpinang (Bangka Belitung)",
+    "721": "Bandar Lampung (Lampung)",
+    "736": "Bengkulu (Bengkulu)",
+    "741": "Jambi (Jambi)",
+    "751": "Padang (Sumatera Barat)",
+    "761": "Pekanbaru (Riau)",
+    "771": "Tanjung Pinang (Kepulauan Riau)",
+    "778": "Batam (Kepulauan Riau)",
+    "911": "Ambon (Maluku)",
+    "921": "Ternate (Maluku Utara)",
+    "951": "Sorong (Papua Barat Daya)",
+    "967": "Jayapura (Papua)",
+    "971": "Merauke (Papua Selatan)",
 }
 
-# ---------------- Deteksi Operator ----------------
-op_name = None
-op_brand = None
+def match_area(rest):
+    for L in (3, 2):
+        if rest[:L] in AREA:
+            return rest[:L], AREA[rest[:L]]
+    return None, None
 
-if is_id:
-    print("  --- Deteksi Operator (berdasarkan prefix) ---")
-    if digits.startswith("62"):
-        prefix4 = "0" + digits[2:5]
-    else:
-        prefix4 = digits[:4]
+def out(label, value):
+    print(f"  {label:<16}: {value}")
 
-    if prefix4 in OPERATOR_MAP:
-        op_name, op_brand = OPERATOR_MAP[prefix4]
-        print(f"  Operator        : {op_name}")
-        print(f"  Brand           : {op_brand}")
-        print(f"  Prefix          : {prefix4}")
-    else:
-        print("  Operator        : Tidak terdeteksi (prefix tidak dikenal)")
-    print()
-
-# ---------------- Cek WhatsApp ----------------
-print("  --- Cek WhatsApp ---")
-wa_alt = f"https://wa.me/{intl}"
-wa_status = None
-
-try:
-    req = urllib.request.Request(wa_alt, method="HEAD", headers={
-        "User-Agent": "Mozilla/5.0 (Termux; Sfixx-OSINT)"
-    })
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        code = r.getcode()
-    if code in (200, 302):
-        print(f"  Status          : OK Kemungkinan terdaftar di WhatsApp")
-        wa_status = True
-    else:
-        print(f"  Status          : -- Tidak terdeteksi (kode {code})")
-        wa_status = False
-except Exception:
-    print("  Status          : ?? Tidak bisa dicek (API tidak tersedia)")
-print()
-
-# ---------------- Info Tambahan (phonenumbers) ----------------
-print("  --- Info Tambahan ---")
-has_libphone = False
+# ---------------- libphonenumber (opsional) ----------------
+lib = {}
 try:
     import phonenumbers
-    from phonenumbers import geocoder, carrier, number_type, PhoneNumberType
+    from phonenumbers import geocoder, carrier, timezone, PhoneNumberType as T
     pn = phonenumbers.parse("+" + intl, None)
-    if phonenumbers.is_valid_number(pn):
-        has_libphone = True
-        loc = geocoder.description_for_number(pn, "id") or "-"
-        car = carrier.name_for_number(pn, "id") or "-"
-        ntype = number_type(pn)
-        type_map = {
-            PhoneNumberType.MOBILE: "Mobile",
-            PhoneNumberType.FIXED_LINE: "Fixed Line (Landline)",
-            PhoneNumberType.FIXED_LINE_OR_MOBILE: "Fixed Line / Mobile",
-            PhoneNumberType.TOLL_FREE: "Toll Free",
-            PhoneNumberType.VOIP: "VoIP",
-            PhoneNumberType.PREMIUM_RATE: "Premium Rate",
-            PhoneNumberType.SHARED_COST: "Shared Cost",
-            PhoneNumberType.PERSONAL_NUMBER: "Personal Number",
-            PhoneNumberType.PAGER: "Pager",
-            PhoneNumberType.UAN: "UAN",
-            PhoneNumberType.VOICEMAIL: "Voicemail",
-            PhoneNumberType.UNKNOWN: "Unknown",
-        }
-        print(f"  Negara          : {loc}")
-        print(f"  Carrier         : {car}")
-        print(f"  Tipe            : {type_map.get(ntype, 'Unknown')}")
-    else:
-        print("  Nomor           : Tidak valid menurut libphonenumber")
+    lib["valid"] = phonenumbers.is_valid_number(pn)
+    lib["possible"] = phonenumbers.is_possible_number(pn)
+    lib["region"] = phonenumbers.region_code_for_number(pn)
+    lib["country"] = geocoder.country_name_for_number(pn, "id") or None
+    lib["geo"] = geocoder.description_for_number(pn, "id") or None
+    lib["carrier"] = carrier.name_for_number(pn, "id") or None
+    lib["timezones"] = list(timezone.time_zones_for_number(pn))
+    lib["intl_fmt"] = phonenumbers.format_number(pn, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+    lib["nat_fmt"] = phonenumbers.format_number(pn, phonenumbers.PhoneNumberFormat.NATIONAL)
+    tmap = {T.MOBILE: "Seluler", T.FIXED_LINE: "Telepon rumah (landline)",
+            T.FIXED_LINE_OR_MOBILE: "Landline / Seluler", T.TOLL_FREE: "Toll free",
+            T.VOIP: "VoIP", T.PREMIUM_RATE: "Premium rate", T.SHARED_COST: "Shared cost",
+            T.PERSONAL_NUMBER: "Personal", T.PAGER: "Pager", T.UAN: "UAN",
+            T.VOICEMAIL: "Voicemail", T.UNKNOWN: "Tidak diketahui"}
+    lib["type"] = tmap.get(phonenumbers.number_type(pn), "Tidak diketahui")
 except ImportError:
-    print("  (Install 'phonenumbers' untuk info lebih lengkap:")
-    print("   pip install phonenumbers)")
+    lib = None
 except Exception as e:
-    print(f"  Error parsing   : {e}")
+    lib = {"error": str(e)}
 
-if not has_libphone:
-    print("  Negara          : Indonesia (asumsi dari prefix)")
-
-print()
-
-# ---------------- Kemungkinan Wilayah / Alamat ----------------
-print("  --- Kemungkinan Wilayah ---")
-
-AREA_CODE = {
-    "21": "Jakarta, Bogor, Depok, Tangerang, Bekasi (Jabodetabek)",
-    "22": "Bandung, Cimahi, Sumedang (Jawa Barat)",
-    "23": "Cirebon, Indramayu, Majalengka, Kuningan (Jawa Barat)",
-    "24": "Semarang, Salatiga, Demak, Kudus (Jawa Tengah)",
-    "25": "Bogor (sebagian), Sukabumi, Cianjur (Jawa Barat)",
-    "26": "Bandung (sebagian), Garut, Tasikmalaya (Jawa Barat)",
-    "27": "Yogyakarta, Magelang, Solo (DIY & Jateng)",
-    "28": "Purwokerto, Tegal, Pekalongan (Jawa Tengah)",
-    "29": "Kudus, Jepara, Pati, Rembang (Jawa Tengah)",
-    "31": "Surabaya, Gresik, Sidoarjo (Jawa Timur)",
-    "32": "Malang, Pasuruan, Probolinggo (Jawa Timur)",
-    "33": "Jember, Banyuwangi, Bondowoso (Jawa Timur)",
-    "34": "Kediri, Blitar, Tulungagung (Jawa Timur)",
-    "35": "Madiun, Ngawi, Ponorogo, Magetan (Jawa Timur)",
-    "36": "Denpasar, Badung, Gianyar, Tabanan (Bali)",
-    "37": "Mataram, Lombok (NTB)",
-    "38": "Kupang, Flores, Sumba (NTT)",
-    "41": "Makassar, Gowa, Maros (Sulawesi Selatan)",
-    "42": "Palu, Donggala (Sulawesi Tengah)",
-    "43": "Manado, Bitung, Tomohon (Sulawesi Utara)",
-    "44": "Kendari, Bau-Bau (Sulawesi Tenggara)",
-    "45": "Gorontalo (Gorontalo)",
-    "46": "Ambon, Ternate (Maluku)",
-    "51": "Banjarmasin, Martapura (Kalimantan Selatan)",
-    "52": "Pontianak, Singkawang (Kalimantan Barat)",
-    "53": "Palangkaraya, Sampit (Kalimantan Tengah)",
-    "54": "Samarinda, Balikpapan, Bontang (Kalimantan Timur)",
-    "55": "Tarakan, Nunukan (Kalimantan Utara)",
-    "61": "Medan, Binjai, Deli Serdang (Sumatera Utara)",
-    "62": "Pematang Siantar, Tebing Tinggi (Sumatera Utara)",
-    "63": "Riau (sebagian), Kepulauan Riau",
-    "64": "Pekanbaru, Dumai (Riau)",
-    "65": "Jambi (Jambi)",
-    "66": "Padang, Bukittinggi (Sumatera Barat)",
-    "71": "Palembang, Prabumulih (Sumatera Selatan)",
-    "72": "Bengkulu (Bengkulu)",
-    "73": "Bandar Lampung, Metro (Lampung)",
-    "74": "Jambi (sebagian), Riau (sebagian)",
-    "75": "Padang (sebagian), Bukittinggi (Sumbar)",
-    "76": "Pekanbaru (sebagian), Dumai (Riau)",
-    "77": "Batam, Tanjung Pinang (Kepulauan Riau)",
-    "81": "Jayapura, Merauke (Papua)",
-    "90": "Papua (sebagian)",
-    "91": "Papua (sebagian)",
-    "92": "Papua (sebagian)",
-    "93": "Papua (sebagian)",
-}
-
-OPERATOR_COVERAGE = {
-    "Telkomsel": "Nasional (seluruh Indonesia)",
-    "Indosat Ooredoo": "Nasional (seluruh Indonesia)",
-    "XL Axiata": "Nasional (seluruh Indonesia)",
-    "AXIS": "Nasional (seluruh Indonesia)",
-    "Tri (3)": "Nasional (seluruh Indonesia)",
-    "Smartfren": "Nasional (seluruh Indonesia)",
-}
-
-is_landline = False
+# ---------------- Analisa ----------------
+operator = brand_prefix = None
+number_type = "Tidak diketahui"
+area_code = area_name = None
 
 if is_id:
-    # Nomor Indonesia
-    if digits.startswith("62"):
-        rest = digits[2:]
-    else:
-        rest = digits[1:]
-
-    # --- Cek apakah landline ---
-    # Landline Indonesia: 0 + kode area (2 digit) + nomor lokal
-    # Contoh: 021xxxxxxx (Jakarta), 022xxxxxxx (Bandung)
-    # Nomor HP: 08xx (prefix 4 digit)
+    rest = intl[2:]
     if rest.startswith("8"):
-        # Nomor seluler
-        print(f"  Tipe Nomor      : Nomor Seluler (Mobile)")
-        if op_name:
-            print(f"  Operator        : {op_name}")
-            print(f"  Cakupan         : {OPERATOR_COVERAGE.get(op_name, 'Tidak diketahui')}")
-        print(f"  Wilayah Presisi : TIDAK DAPAT DITENTUKAN")
-        print()
-        print(f"  [!] CATATAN: Nomor HP TIDAK menyimpan alamat rumah.")
-        print(f"      Operator tidak membagikan data lokasi ke publik.")
-        print(f"      Untuk alamat presisi butuh akses resmi (polisi).")
+        number_type = "Seluler (Mobile)"
+        brand_prefix = "0" + rest[:3]
+        operator = PREFIX2OP.get(rest[:3])
     else:
-        # Kemungkinan landline, ambil 2 digit pertama sebagai kode area
-        area = rest[:2]
-        if area in AREA_CODE:
-            is_landline = True
-            print(f"  Tipe Nomor      : Telepon Rumah (Landline)")
-            print(f"  Kode Area       : 0{area}")
-            print(f"  Perkiraan Kota  : {AREA_CODE[area]}")
-        else:
-            print(f"  Tipe Nomor      : Tidak dapat diklasifikasi")
-            print(f"  Kode Area       : 0{area} (tidak ada di database)")
-else:
-    print(f"  Tipe Nomor      : Non-Indonesia")
-    print(f"  Wilayah         : Di luar cakupan modul (hanya ID)")
+        area_code, area_name = match_area(rest)
+        number_type = "Telepon rumah (Landline)" if area_name else "Tidak dapat diklasifikasi"
+elif lib and "type" in lib:
+    number_type = lib["type"]
 
+result.update({
+    "type": number_type, "operator": operator, "prefix": brand_prefix,
+    "area_code": ("0" + area_code) if area_code else None,
+    "area_name": area_name,
+})
+
+# ---------------- Link WhatsApp ----------------
+# wa.me selalu merespon 200 untuk nomor apa pun, jadi TIDAK bisa dipakai
+# memastikan nomor terdaftar. Modul ini hanya membuat link untuk dibuka manual.
+wa_link = f"https://wa.me/{intl}"
+result["whatsapp_link"] = wa_link
+
+if lib and "valid" in lib:
+    result["libphonenumber"] = lib
+
+if AS_JSON:
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    sys.exit(0)
+
+# ---------------- Output teks ----------------
+print("  --- Format ---")
+out("Nomor Asli", raw)
+out("Nomor Bersih", d)
+out("E.164", "+" + intl)
+if lib and "intl_fmt" in lib:
+    out("Internasional", lib["intl_fmt"])
+    out("Nasional", lib["nat_fmt"])
+    out("Valid", "Ya" if lib["valid"] else "Tidak (menurut libphonenumber)")
 print()
 
-# ---------------- Reverse Lookup via Numverify-like (opsional) ----------------
-# Beberapa API publik gratis bisa dipakai. Kalau butuh, aktifkan di sini.
-# Contoh: https://apilayer.com/marketplace/number_verification-api
-# Tidak diaktifkan default karena butuh API key.
+print("  --- Identifikasi ---")
+out("Negara", (lib or {}).get("country") or ("Indonesia" if is_id else "Tidak diketahui"))
+out("Tipe", number_type)
+if is_id and operator:
+    out("Operator", operator)
+    out("Prefix", brand_prefix)
+elif is_id and brand_prefix:
+    out("Operator", "Prefix tidak dikenal")
+if lib and lib.get("carrier") and not operator:
+    out("Carrier", lib["carrier"])
+if lib and lib.get("timezones"):
+    out("Zona Waktu", ", ".join(lib["timezones"]))
+print()
 
-# ---------------- Catatan ----------------
+print("  --- Kemungkinan Wilayah ---")
+if is_id and area_name:
+    out("Kode Area", "0" + area_code)
+    out("Perkiraan Kota", area_name)
+    print("  (Level kota/provinsi saja; bukan alamat rumah.)")
+elif is_id and number_type.startswith("Seluler"):
+    out("Wilayah", "Tidak dapat ditentukan")
+    print("  Nomor seluler tidak terikat ke lokasi atau alamat.")
+elif lib and lib.get("geo"):
+    out("Wilayah", lib["geo"])
+else:
+    out("Wilayah", "Tidak diketahui")
+print()
+
+print("  --- WhatsApp ---")
+out("Link", wa_link)
+print("  Buka manual untuk melihat apakah chat bisa dimulai.")
+print("  Pengecekan otomatis tidak akurat, jadi tidak dilakukan.")
+print()
+
+if lib is None:
+    print("  Tip: pip install phonenumbers  (info valid/zona waktu/carrier)")
+    print()
+
 print("  --- Catatan ---")
-print("  - Deteksi operator berdasarkan prefix; bisa berubah jika nomor")
-print("    di-porting antar operator.")
-print("  - Cek WhatsApp berbasis redirect publik; hasil bisa")
-print("    false-positive/negative karena rate-limit.")
-if not is_landline:
-    print("  - Nomor HP TIDAK menyimpan alamat. Klaim sebaliknya = scam.")
-print("  - Modul ini HANYA untuk edukasi & riset legal.")
+print("  - Operator berdasarkan prefix; bisa berbeda jika nomor di-porting.")
+print("  - Nomor telepon tidak menyimpan alamat. Klaim sebaliknya = scam.")
+print("  - Gunakan hanya untuk edukasi & riset yang legal.")
 PYEOF
 
-    echo
-    log_done "Selesai."
+    [ "$json" -eq 0 ] && { echo; log_done "Selesai."; }
 }
