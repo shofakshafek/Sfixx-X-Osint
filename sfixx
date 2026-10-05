@@ -78,6 +78,7 @@ Pemakaian:
   sfixx headers <url>            HTTP headers
   sfixx subdomain <domain>       Subdomain discovery (crt.sh)
   sfixx url <url>                URL analyzer
+  sfixx phone <nomor>            Cek nomor telepon (operator, WA, wilayah)
   sfixx system                   System / network info
   sfixx update                   Update dari GitHub
   sfixx help                     Tampilkan bantuan
@@ -114,7 +115,7 @@ dispatch() {
             source "$MODULES_DIR/system.sh"
             system_main
             ;;
-        username|domain|dns|ip|headers|subdomain|url)
+        username|domain|dns|ip|headers|subdomain|url|phone)
             if [ $# -lt 1 ] || [ -z "$1" ]; then
                 log_err "Argumen kosong. Contoh: sfixx $cmd <nilai>"
                 exit 1
@@ -149,6 +150,7 @@ interactive_arg() {
         headers)   prompt="Masukkan URL (http/https): " ;;
         subdomain) prompt="Masukkan domain          : " ;;
         url)       prompt="Masukkan URL             : " ;;
+        phone)     prompt="Masukkan nomor telepon   : " ;;
         *)         prompt="Masukkan input           : " ;;
     esac
     read -r -p "$(echo -e "${C_YELLOW}${prompt}${C_RESET}")" arg
@@ -168,17 +170,18 @@ main_menu() {
 
         echo -e "${C_CYAN}╔══════════════════════════════════╗${C_RESET}"
         echo -e "${C_CYAN}║${C_RESET}      ${C_YELLOW}Sfixx x OSINT${C_RESET}               ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET}      ${C_WHITE}Termux OSINT Toolkit${C_RESET}        ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET}      ${C_WHITE}Termux OSINT Toolkit${C_RESET}         ${C_CYAN}║${C_RESET}"
         echo -e "${C_CYAN}╠══════════════════════════════════╣${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[1]${C_RESET} Username Search             ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[2]${C_RESET} Domain Information          ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[3]${C_RESET} DNS Lookup                  ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[4]${C_RESET} IP Information              ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[5]${C_RESET} HTTP Headers                ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[6]${C_RESET} Subdomain Discovery         ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[7]${C_RESET} URL Analyzer                ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[8]${C_RESET} System / Network Info       ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[0]${C_RESET} Exit                        ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[1]${C_RESET} Username Search               ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[2]${C_RESET} Domain Information            ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[3]${C_RESET} DNS Lookup                    ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[4]${C_RESET} IP Information                ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[5]${C_RESET} HTTP Headers                  ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[6]${C_RESET} Subdomain Discovery           ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[7]${C_RESET} URL Analyzer                  ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[8]${C_RESET} System / Network Info         ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[9]${C_RESET} Phone Number Checker          ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[0]${C_RESET} Exit                          ${C_CYAN}║${C_RESET}"
         echo -e "${C_CYAN}╚══════════════════════════════════╝${C_RESET}"
         echo
 
@@ -197,6 +200,7 @@ main_menu() {
                 source "$MODULES_DIR/system.sh"
                 system_main
                 ;;
+            9) interactive_arg phone ;;
             0|q|Q|exit) log_ok "Sampai jumpa."; exit 0 ;;
             "") ;;
             *) log_err "Pilihan tidak valid." ;;
