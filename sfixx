@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ================================================
-# Sfixx x OSINT - Main CLI
+# Sfixx x Osint - Main CLI
 # Author : Sfixx
 # License: MIT
 # ================================================
@@ -23,7 +23,7 @@ if [ -f "$CONFIG_FILE" ]; then
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
 else
-    VERSION="1.0.0"
+    VERSION="1.5.0"
     TIMEOUT=10
 fi
 
