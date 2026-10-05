@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ================================================
-# Sfixx x Osint - Main CLI
+# Sfixx x OSINT - Main CLI
 # Author : Sfixx
 # License: MIT
+# Version: 1.5.0
 # ================================================
 
 # --- Resolve script directory even via symlink ---
@@ -25,6 +26,7 @@ if [ -f "$CONFIG_FILE" ]; then
 else
     VERSION="1.5.0"
     TIMEOUT=10
+    HIBP_API_KEY=""
 fi
 
 # --- Load banner (defines colors + show_banner) ---
@@ -32,12 +34,12 @@ if [ -f "$PROJECT_DIR/assets/banner.sh" ]; then
     # shellcheck disable=SC1091
     source "$PROJECT_DIR/assets/banner.sh"
 else
-    C_RESET=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_CYAN=''; C_MAGENTA=''; C_WHITE=''
+    C_RESET=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_BLUE=''; C_CYAN=''; C_MAGENTA=''; C_WHITE=''
     show_banner() { echo "Sfixx x OSINT v$VERSION"; }
 fi
 
 # --- Logging helpers ---
-log_info() { echo -e "${C_BLUE:-}[-]${C_RESET} $*"; }
+log_info() { echo -e "${C_BLUE}[-]${C_RESET} $*"; }
 log_ok()   { echo -e "${C_GREEN}[+]${C_RESET} $*"; }
 log_warn() { echo -e "${C_YELLOW}[!]${C_RESET} $*"; }
 log_err()  { echo -e "${C_RED}[x]${C_RESET} $*"; }
@@ -78,17 +80,31 @@ Pemakaian:
   sfixx headers <url>            HTTP headers
   sfixx subdomain <domain>       Subdomain discovery (crt.sh)
   sfixx url <url>                URL analyzer
-  sfixx phone <nomor>            Cek nomor telepon (operator, WA, wilayah)
   sfixx system                   System / network info
+  sfixx phone <nomor>            Cek nomor telepon (operator, WA, wilayah)
+  sfixx gmail <email>            Cek email lengkap (breach, Google, Gravatar)
+  sfixx email <email>            Email OSINT (valid, MX, provider, risk)
+  sfixx recovery                 Menu bantuan akun kena hack/scam
+  sfixx recovery google          Panduan recovery Google
+  sfixx recovery instagram       Panduan recovery Instagram
+  sfixx recovery facebook        Panduan recovery Facebook
+  sfixx recovery whatsapp        Panduan recovery WhatsApp
+  sfixx recovery tiktok          Panduan recovery TikTok
+  sfixx recovery scam <target>   Cek nomor/link/email scam
+  sfixx recovery report          Cara lapor polisi / Komdigi
   sfixx update                   Update dari GitHub
   sfixx help                     Tampilkan bantuan
   sfixx version                  Versi
 
 Contoh:
+  sfixx username torvalds
   sfixx domain example.com
-  sfixx dns example.com
+  sfixx dns github.com
   sfixx ip 8.8.8.8
-  sfixx username sfixx
+  sfixx phone 081234567890
+  sfixx gmail user@gmail.com
+  sfixx email test@example.com
+  sfixx recovery
 EOF
 }
 
@@ -97,7 +113,9 @@ EOF
 # ---------------------------------------------------
 dispatch() {
     local cmd="$1"; shift
+
     case "$cmd" in
+        # ---- Internal commands ----
         menu|interactive)
             main_menu
             ;;
@@ -110,12 +128,47 @@ dispatch() {
         update)
             bash "$PROJECT_DIR/update.sh"
             ;;
+
+        # ---- System (no arg) ----
         system)
             # shellcheck disable=SC1091
             source "$MODULES_DIR/system.sh"
             system_main
             ;;
-        username|domain|dns|ip|headers|subdomain|url|phone)
+
+        # ---- Recovery (special: punya sub-menu sendiri) ----
+        recovery)
+            # shellcheck disable=SC1091
+            source "$MODULES_DIR/recovery.sh"
+            if [ $# -ge 1 ]; then
+                recovery_main "$1"
+            else
+                recovery_menu
+            fi
+            ;;
+
+        # ---- Email OSINT (modul khusus email_osint.sh) ----
+        email)
+            if [ $# -lt 1 ] || [ -z "$1" ]; then
+                log_err "Email wajib diisi. Contoh: sfixx email user@example.com"
+                exit 1
+            fi
+            if [ -f "$MODULES_DIR/email_osint.sh" ]; then
+                # shellcheck disable=SC1091
+                source "$MODULES_DIR/email_osint.sh"
+                email_osint_main "$1"
+            elif [ -f "$MODULES_DIR/email.sh" ]; then
+                # shellcheck disable=SC1091
+                source "$MODULES_DIR/email.sh"
+                email_main "$1"
+            else
+                log_err "Modul email tidak ditemukan."
+                exit 1
+            fi
+            ;;
+
+        # ---- Modul dengan 1 argumen ----
+        username|domain|dns|ip|headers|subdomain|url|phone|gmail)
             if [ $# -lt 1 ] || [ -z "$1" ]; then
                 log_err "Argumen kosong. Contoh: sfixx $cmd <nilai>"
                 exit 1
@@ -124,9 +177,13 @@ dispatch() {
             source "$MODULES_DIR/${cmd}.sh"
             "${cmd}_main" "$1"
             ;;
+
+        # ---- Kosong → menu ----
         "")
             main_menu
             ;;
+
+        # ---- Tidak dikenal ----
         *)
             log_err "Command tidak dikenal: $cmd"
             echo
@@ -137,7 +194,7 @@ dispatch() {
 }
 
 # ---------------------------------------------------
-# Menu interaktif
+# Interactive arg handler
 # ---------------------------------------------------
 interactive_arg() {
     local module="$1"
@@ -151,59 +208,100 @@ interactive_arg() {
         subdomain) prompt="Masukkan domain          : " ;;
         url)       prompt="Masukkan URL             : " ;;
         phone)     prompt="Masukkan nomor telepon   : " ;;
+        gmail)     prompt="Masukkan email           : " ;;
+        email)     prompt="Masukkan email           : " ;;
         *)         prompt="Masukkan input           : " ;;
     esac
+
     read -r -p "$(echo -e "${C_YELLOW}${prompt}${C_RESET}")" arg
     if [ -z "$arg" ]; then
         log_err "Input tidak boleh kosong."
         return 1
     fi
+
+    # Special case untuk email (modul email_osint.sh)
+    if [ "$module" = "email" ]; then
+        if [ -f "$MODULES_DIR/email_osint.sh" ]; then
+            # shellcheck disable=SC1091
+            source "$MODULES_DIR/email_osint.sh"
+            email_osint_main "$arg"
+        elif [ -f "$MODULES_DIR/email.sh" ]; then
+            # shellcheck disable=SC1091
+            source "$MODULES_DIR/email.sh"
+            email_main "$arg"
+        else
+            log_err "Modul email tidak ditemukan."
+            return 1
+        fi
+        return 0
+    fi
+
+    # Modul biasa
     # shellcheck disable=SC1090
     source "$MODULES_DIR/${module}.sh"
     "${module}_main" "$arg"
 }
 
+# ---------------------------------------------------
+# Menu interaktif
+# ---------------------------------------------------
 main_menu() {
     while true; do
         clear 2>/dev/null || printf '\033c'
         show_banner
 
-        echo -e "${C_CYAN}╔══════════════════════════════════╗${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET}      ${C_YELLOW}Sfixx x OSINT${C_RESET}               ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET}      ${C_WHITE}Termux OSINT Toolkit${C_RESET}        ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}╠══════════════════════════════════╣${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[1]${C_RESET} Username Search              ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[2]${C_RESET} Domain Information           ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[3]${C_RESET} DNS Lookup                   ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[4]${C_RESET} IP Information               ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[5]${C_RESET} HTTP Headers                 ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[6]${C_RESET} Subdomain Discovery          ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[7]${C_RESET} URL Analyzer                 ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[8]${C_RESET} System / Network Info        ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[9]${C_RESET} Phone Number Checker         ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[0]${C_RESET} Exit                         ${C_CYAN}║${C_RESET}"
-        echo -e "${C_CYAN}╚══════════════════════════════════╝${C_RESET}"
+        echo -e "${C_CYAN}╔══════════════════════════════════════╗${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET}        ${C_YELLOW}Sfixx x OSINT${C_RESET}                 ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET}        ${C_WHITE}Termux OSINT Toolkit${C_RESET}          ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}╠══════════════════════════════════════╣${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[1]${C_RESET}  Username Search                 ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[2]${C_RESET}  Domain Information              ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[3]${C_RESET}  DNS Lookup                      ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[4]${C_RESET}  IP Information                  ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[5]${C_RESET}  HTTP Headers                    ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[6]${C_RESET}  Subdomain Discovery             ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[7]${C_RESET}  URL Analyzer                    ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[8]${C_RESET}  System / Network Info           ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[9]${C_RESET}  Phone Number Checker            ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[10]${C_RESET} Email OSINT                     ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[11]${C_RESET} Gmail / Email Deep Check        ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_RED}[12]${C_RESET} Recovery / Incident Helper      ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}║${C_RESET} ${C_GREEN}[0]${C_RESET}  Exit                            ${C_CYAN}║${C_RESET}"
+        echo -e "${C_CYAN}╚══════════════════════════════════════╝${C_RESET}"
         echo
 
         read -r -p "$(echo -e "${C_YELLOW}Sfixx > ${C_RESET}")" choice
         echo
         case "$choice" in
-            1) interactive_arg username ;;
-            2) interactive_arg domain ;;
-            3) interactive_arg dns ;;
-            4) interactive_arg ip ;;
-            5) interactive_arg headers ;;
-            6) interactive_arg subdomain ;;
-            7) interactive_arg url ;;
+            1)  interactive_arg username ;;
+            2)  interactive_arg domain ;;
+            3)  interactive_arg dns ;;
+            4)  interactive_arg ip ;;
+            5)  interactive_arg headers ;;
+            6)  interactive_arg subdomain ;;
+            7)  interactive_arg url ;;
             8)
                 # shellcheck disable=SC1091
                 source "$MODULES_DIR/system.sh"
                 system_main
                 ;;
-            9) interactive_arg phone ;;
-            0|q|Q|exit) log_ok "Sampai jumpa."; exit 0 ;;
-            "") ;;
-            *) log_err "Pilihan tidak valid." ;;
+            9)  interactive_arg phone ;;
+            10) interactive_arg email ;;
+            11) interactive_arg gmail ;;
+            12)
+                # shellcheck disable=SC1091
+                source "$MODULES_DIR/recovery.sh"
+                recovery_menu
+                ;;
+            0|q|Q|exit)
+                log_ok "Sampai jumpa."
+                exit 0
+                ;;
+            "")
+                ;;
+            *)
+                log_err "Pilihan tidak valid."
+                ;;
         esac
         echo
         read -r -p "Tekan Enter untuk kembali ke menu..." _
@@ -214,7 +312,7 @@ main_menu() {
 # Entry point
 # ---------------------------------------------------
 if [ $# -eq 0 ]; then
-    # Show startup only when running interactive
+    # Startup message untuk mode interaktif
     echo -e "${C_BLUE}[*]${C_RESET} Starting Sfixx x OSINT..."
     echo -e "${C_BLUE}[*]${C_RESET} Checking dependencies..."
     for dep in curl; do
